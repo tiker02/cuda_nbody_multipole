@@ -48,7 +48,7 @@ namespace exafmm
     bool issource;
   };
   typedef std::vector<Body> Bodies; //!< Vector of bodies
-  Bodies bodies;
+  inline Bodies bodies;
 
   //! Structure of cells
   struct Cell
@@ -92,13 +92,13 @@ namespace exafmm
 
   //! Global variables
   static char input_fname[200];
-  unsigned int numBodies;
-  int snapnum;
+  inline unsigned int numBodies;
+  inline int snapnum;
 
-  real_t t_now;
-  real_t force_accuracy = 2.0e-07;
+  inline real_t t_now;
+  inline real_t force_accuracy = 2.0e-07;
 
-  real_t G = 1; // 0.004300710573170628;
+  inline real_t G = 1; // 0.004300710573170628;
   // gravitaional constant with Msun, pc and km/s.
 
   struct sys
@@ -108,15 +108,14 @@ namespace exafmm
     struct particle *last;
   };
 
-  struct sys mainsys;
+  inline struct sys mainsys;
 
-  double dt_param = 0.025;
+  inline double dt_param = 0.025;
 
-  int P;                          //!< Order of expansions
-  int NTERM;                      //!< Number of coefficients
-  int ncrit = 300;                //!< Number of bodies per leaf cell
-  real_t theta = 0.5;             //!< Multipole acceptance criterion
-  real_t dX[3], dV[3];            //!< Distance vector
-#pragma omp threadprivate(dX, dV) //!< Make global variables private
+  inline int P;                          //!< Order of expansions
+  inline int NTERM;                      //!< Number of coefficients
+  inline int ncrit = 300;                //!< Number of bodies per leaf cell
+  inline real_t theta = 0.5;             //!< Multipole acceptance criterion
+  inline real_t dX[3], dV[3];            //!< Distance vector
 }
 #endif
