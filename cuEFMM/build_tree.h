@@ -341,19 +341,22 @@ namespace exafmm
     } // End loop over children
   }
 
-  void buildCellsSorted(Body *bodies, int begin, int end, Cell *cell, Cells &cells, real_t *X, real_t R,
+  void buildCellsSorted(Body *bodies, int begin, int end, Cell *cell, Cells &cells, real_t *X, real_t R, int* cell_count,
                         int level = 0)
   {
     //! Create a tree cell
     cell->BODY = bodies + begin; // Pointer of first body in cell
     cell->NBODY = end - begin;   // Number of bodies in cell
     cell->NCHILD = 0;            // Initialize counter for child cells
+    cell->index = *cell_count;
+    (*cell_count)++;
     for (int d = 0; d < 3; d++)
       cell->X[d] = X[d];        // Center position of cell
     cell->R = R / (1 << level); // Cell radius
     //! If cell is a leaf
-    if (end - begin <= ncrit)
-      return;
+    if (end - begin <= ncrit){
+      //std::cout << "Cell " <<  cell->index << " " << cell->NBODY << std::endl;
+      return;}
     //! Count number of bodies in each octant
     int size[8] = {0};
     int offsets[8]; // Offsets and counter for each octant
@@ -428,7 +431,7 @@ namespace exafmm
       if (size[i])
       {                                                            //  If child exists
         buildCellsSorted(bodies, offsets[i], offsets[i] + size[i], // Recursive call for each child
-                         &child[c], cells, Xchild, R, level + 1);
+                         &child[c], cells, Xchild, R, cell_count, level + 1);
         c++; //   Increment child cell counter
       } //  End if for child
     } // End loop over children
@@ -465,7 +468,8 @@ namespace exafmm
     cells.reserve(bodies.size() / 4); // Reserve memory space
     // buildCells(&bodies[0], &buffer[0], 0, bodies.size(), &cells[0], cells, X0, R0);   // Build tree recursively
 
-    buildCellsSorted(&bodies[0], 0, bodies.size(), &cells[0], cells, X0, R0); // Build tree from sorted bodies
+    int cell_count = 0;
+    buildCellsSorted(&bodies[0], 0, bodies.size(), &cells[0], cells, X0, R0, &cell_count); // Build tree from sorted bodies
     return cells;                                                             // Return pointer of root cell
   }
 }

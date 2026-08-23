@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <vector>
 
+#define HUGE HUGE_VAL
+
 #define ENDRUN(fmt, ...) { \
   printf("ENDRUN at %s:%d ", __FILE__, __LINE__);\
   printf(fmt, ## __VA_ARGS__);\

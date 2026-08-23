@@ -60,7 +60,7 @@ namespace exafmm
     int NBODY;  //!< Number of descendant bodies
     //    int NP2P;
     //    int NM2L;
-    //    int index;
+    int index;
     Cell *CHILD; //!< Pointer of first child cell
     Body *BODY;  //!< Pointer of first body
     real_t X[3]; //!< Cell center
@@ -114,8 +114,9 @@ namespace exafmm
 
   inline int P;                          //!< Order of expansions
   inline int NTERM;                      //!< Number of coefficients
-  inline int ncrit = 300;                //!< Number of bodies per leaf cell
+  inline int ncrit = 256;                //!< Number of bodies per leaf cell
   inline real_t theta = 0.5;             //!< Multipole acceptance criterion
   inline real_t dX[3], dV[3];            //!< Distance vector
+  #pragma omp threadprivate(dX, dV)
 }
 #endif

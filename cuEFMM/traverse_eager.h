@@ -2,9 +2,19 @@
 #define traverse_eager_h
 #include "exafmm.h"
 #include "build_tree.h"
+#include "timer.h"
+#include "EFMM.cuh"
+
 
 namespace exafmm
 {
+  enum class TraversalMode {
+      Standard,
+      High,
+      Low
+  };
+
+
   //! Recursive call to post-order tree traversal for upward pass
   void upwardPass(Cell *Ci)
   {
@@ -57,203 +67,168 @@ namespace exafmm
     upwardPass_low(&cells[0]);
   }
 
-  void horizontalPassHigh(Cell *Ci, Cell *Cj, bool get_steps)
+template <TraversalMode mode>
+  void horizontalPass(Cell *Ci, Cell *Cj, bool exploring, bool get_steps = false)
   {
-    for (int d = 0; d < 3; d++)
-      dX[d] = Ci->X[d] - Cj->X[d];
+      for (int d = 0; d < 3; d++)
+          dX[d] = Ci->X[d] - Cj->X[d];
 
-    real_t R2 = norm(dX);
-    real_t f1 = 10, f2 = 10;
+      real_t R2 = norm(dX);
+      bool mac_passed = false;
 
-    real_t Ra = Ci->R;
-    real_t Rb = Cj->R;
-    real_t Ra_p_Rb = (Ra + Rb);
-
-    if (R2 > Ra_p_Rb * Ra_p_Rb)
-    {
-      real_t R = sqrt(R2);
-      real_t Rp = R2;      // std::pow(R, P+2);
-      real_t power_Ra = 1; // std::pow(Ra, P);
-      real_t power_Rb = 1; // std::pow(Rb, P);
-
-      real_t Eba = 0, Eab = 0;
-
-      for (int k = 0; k <= P; k++)
+      if (mode == TraversalMode::High)
       {
-        real_t fac = combinator_coef[P][k];
-        Eab += (Ci->Pn[P - k] * power_Rb * fac);
-        Eba += (Cj->Pn[P - k] * power_Ra * fac);
-        power_Ra *= Ra;
-        power_Rb *= Rb;
-        Rp *= R;
+          real_t thres = 1;
+          real_t f1 = 10, f2 = 10;
+          real_t Ra = Ci->R;
+          real_t Rb = Cj->R;
+          real_t Ra_p_Rb = (Ra + Rb);
+
+          if (R2 > Ra_p_Rb * Ra_p_Rb)
+          {
+              real_t R = sqrt(R2);
+              real_t Rp = R2;
+              real_t power_Ra = 1;
+              real_t power_Rb = 1;
+
+              real_t Eba = 0, Eab = 0;
+              for (int k = 0; k <= P; k++)
+              {
+                  real_t fac = combinator_coef[P][k];
+                  Eab += (Ci->Pn[P - k] * power_Rb * fac);
+                  Eba += (Cj->Pn[P - k] * power_Ra * fac);
+                  power_Ra *= Ra;
+                  power_Rb *= Rb;
+                  Rp *= R;
+              }
+
+              real_t fac = 8 * fmax(Ra, Rb) / Ra_p_Rb / Rp;
+              Eab *= fac;
+              f1 = Eab / (force_accuracy * Cj->min_acc);
+              Eba *= fac;
+              f2 = Eba / (force_accuracy * Ci->min_acc);
+          }
+          mac_passed = (f2 < thres && f1 < thres);
+      }
+      else if (mode == TraversalMode::Standard)
+      {
+          mac_passed = (R2 > (Ci->R + Cj->R) * (Ci->R + Cj->R));
+      }
+      else if (mode == TraversalMode::Low)
+      {
+          mac_passed = (R2 > (Ci->R + Cj->R) * (Ci->R + Cj->R) * 3);
       }
 
-      real_t fac = 8 * fmax(Ra, Rb) / Ra_p_Rb / Rp;
-      Eab *= fac;
-      f1 = Eab / (force_accuracy * Cj->min_acc);
-      Eba *= fac;
-      f2 = Eba / (force_accuracy * Ci->min_acc);
-    }
-
-    real_t thres = 1;
-
-    // symmetric tree walk, use f2 < thres for unsymmetric walk
-
-    if (f2 < thres && f1 < thres)
-    {
-      if ((Ci->NBODY <= 2 && Cj->NBODY <= 8) || (Cj->NBODY <= 2 && Ci->NBODY <= 8))
+      //far field interactions
+      if (mac_passed)
       {
-        if (get_steps)
-        {
-          P2P(Ci, Cj);
-        }
-        else
-        {
-          P2P_simple(Ci, Cj);
-        }
+          // High and Standard modes drop down to P2P for very tiny leaf cell pairs
+          if (mode != TraversalMode::Low && ((Ci->NBODY <= 2 && Cj->NBODY <= 8) || (Cj->NBODY <= 2 && Ci->NBODY <= 8)))
+          {
+            cufmm::add_interaction(*Ci, *Cj, cufmm::interaction::P2P, exploring);
+          }
+          else if(!exploring)
+          {
+              if constexpr(mode == TraversalMode::Low) 
+              {
+                  M2L_low(Ci, Cj);
+              } 
+              else 
+              {
+                if (!get_steps) M2L_rotate(Ci, Cj);
+              }
+          }
+      }
+      // bot cells are leaves
+      else if (Ci->NCHILD == 0 && Cj->NCHILD == 0)
+      {
+        cufmm::add_interaction(*Ci, *Cj, cufmm::interaction::P2P, exploring);
+      }
+
+      //RECURSION
+      else if (Cj->NCHILD == 0 || (Ci->R >= Cj->R && Ci->NCHILD != 0))
+      {
+          for (Cell *ci = Ci->CHILD; ci != Ci->CHILD + Ci->NCHILD; ci++)
+          {
+            #pragma omp task untied if (ci->NBODY > 100)
+              horizontalPass<mode>(ci, Cj, exploring, get_steps);
+          }
       }
       else
       {
-        if (!get_steps)
-          M2L_rotate(Ci, Cj); //  M2L kernel
+          for (Cell *cj = Cj->CHILD; cj != Cj->CHILD + Cj->NCHILD; cj++)
+          {
+              horizontalPass<mode>(Ci, cj, exploring, get_steps);
+          }
       }
-    }
-    else if (Ci->NCHILD == 0 && Cj->NCHILD == 0)
-    { // Else if both cells are leafs
-      if (get_steps)
-      {
-        P2P(Ci, Cj); //  P2P kernel
-      }
-      else
-      {
-        P2P_simple(Ci, Cj);
-      }
-    }
-    else if (Cj->NCHILD == 0 || (Ci->R >= Cj->R && Ci->NCHILD != 0))
-    { // If Cj is leaf or Ci is larger
-      for (Cell *ci = Ci->CHILD; ci != Ci->CHILD + Ci->NCHILD; ci++)
-      {                                        // Loop over Ci's children
-#pragma omp task untied if (ci->NBODY > 100)   //   Start OpenMP task if large enough task
-        horizontalPassHigh(ci, Cj, get_steps); //   Recursive call to target child cells
-      } //  End loop over Ci's children
-    }
-    else
-    { // Else if Ci is leaf or Cj is larger
-      for (Cell *cj = Cj->CHILD; cj != Cj->CHILD + Cj->NCHILD; cj++)
-      {                                        // Loop over Cj's children
-        horizontalPassHigh(Ci, cj, get_steps); //   Recursive call to source child cells
-      } //  End loop over Cj's children
-    } // End if for leafs and Ci Cj size
   }
-
-  //! Recursive call to dual tree traversal for horizontal pass
-  void horizontalPass(Cell *Ci, Cell *Cj, bool get_steps)
+ 
+  void horizontalPass(Cells &icells, Cells &jcells, bool high_force, bool is_low, bool get_steps)
   {
-    for (int d = 0; d < 3; d++)
-      dX[d] = Ci->X[d] - Cj->X[d]; // Distance vector from source to target
-
-    real_t R2 = norm(dX) * theta * theta; // Scalar distance squared
-
-    if (R2 > (Ci->R + Cj->R) * (Ci->R + Cj->R))
-    { // If distance is far enough
-      if ((Ci->NBODY <= 2 && Cj->NBODY <= 8) || (Cj->NBODY <= 2 && Ci->NBODY <= 8))
+      cufmm::Bodies dev_bodies = cufmm::device_bodies_alloc(exafmm::bodies.size());
+      cufmm::bodies_H2D(exafmm::bodies, dev_bodies);
+      cufmm::interactions_manage(false, icells.size());
+          
+      if (is_low) 
       {
-        if (get_steps)
+        #pragma omp parallel	
+        #pragma omp single nowait
         {
-          P2P(Ci, Cj);
+          horizontalPass<TraversalMode::Low>(&icells[0], &jcells[0], true);
         }
-        else
+          cufmm::interactions_manage(true);
+        #pragma omp parallel		
+        #pragma omp single nowait
         {
-          P2P_simple(Ci, Cj);
+          horizontalPass<TraversalMode::Low>(&icells[0], &jcells[0], false);
+        }
+#ifdef DEBUG
+start("cuP2P");
+#endif
+          cufmm::cuP2P_launch<cufmm::Implementation::low>(dev_bodies);
+#ifdef DEBUG
+stop("cuP2P");
+#endif
+      } 
+      else if (high_force) 
+      {
+        #pragma omp parallel		
+        #pragma omp single nowait
+        {
+          horizontalPass<TraversalMode::High>(&icells[0], &jcells[0], true, get_steps);
+        }
+          cufmm::interactions_manage(true);
+        #pragma omp parallel		
+        #pragma omp single nowait
+        {
+          horizontalPass<TraversalMode::High>(&icells[0], &jcells[0], false, get_steps);
+        }
+      } 
+      else 
+      {
+        #pragma omp parallel		
+        #pragma omp single nowait
+        {
+          horizontalPass<TraversalMode::Standard>(&icells[0], &jcells[0], true, get_steps);
+        }
+          cufmm::interactions_manage(true);
+
+        #pragma omp parallel		
+        #pragma omp single nowait
+        {
+          horizontalPass<TraversalMode::Standard>(&icells[0], &jcells[0], false, get_steps);
         }
       }
-      else
-      {
-        if (!get_steps)
-          M2L_rotate(Ci, Cj); //  M2L kernel
-      }
-    }
-    else if (Ci->NCHILD == 0 && Cj->NCHILD == 0)
-    { // Else if both cells are leafs
-      if (get_steps)
-      {
-        P2P(Ci, Cj); //  P2P kernel
-      }
-      else
-      {
-        P2P_simple(Ci, Cj); // simple P2P kernel
-      }
-    }
-    else if (Cj->NCHILD == 0 || (Ci->R >= Cj->R && Ci->NCHILD != 0))
-    { // If Cj is leaf or Ci is larger
-      for (Cell *ci = Ci->CHILD; ci != Ci->CHILD + Ci->NCHILD; ci++)
-      {                                      // Loop over Ci's children
-#pragma omp task untied if (ci->NBODY > 100) //   Start OpenMP task if large enough task
-        horizontalPass(ci, Cj, get_steps);   //   Recursive call to target child cells
-      } //  End loop over Ci's children
-    }
-    else
-    { // Else if Ci is leaf or Cj is larger
-      for (Cell *cj = Cj->CHILD; cj != Cj->CHILD + Cj->NCHILD; cj++)
-      {                                    // Loop over Cj's children
-        horizontalPass(Ci, cj, get_steps); //   Recursive call to source child cells
-      } //  End loop over Cj's children
-    } // End if for leafs and Ci Cj size
-  }
-
-  //! Horizontal pass interface
-  void horizontalPass(Cells &icells, Cells &jcells, bool high_force, bool get_steps)
-  {
-#pragma omp parallel // Start OpenMP
-#pragma omp single nowait
-    { // Start OpenMP single region with nowait
-      if (!high_force)
-        horizontalPass(&icells[0], &jcells[0], get_steps); // Pass root cell to recursive call
-      else
-        horizontalPassHigh(&icells[0], &jcells[0], get_steps); // Pass root cell to recursive call
-    }
-  }
-
-  //! Recursive call to dual tree traversal for horizontal pass
-  void horizontalPass_low(Cell *Ci, Cell *Cj)
-  {
-    for (int d = 0; d < 3; d++)
-      dX[d] = Ci->X[d] - Cj->X[d];
-    real_t R2 = norm(dX);
-    // use theta=1; notice C->R is the side length of a cell, therefore R should multiply by sqrt(3)
-    if (R2 > (Ci->R + Cj->R) * (Ci->R + Cj->R) * 3)
-    {
-      M2L_low(Ci, Cj);
-    }
-    else if (Ci->NCHILD == 0 && Cj->NCHILD == 0)
-    {
-      P2P_low(Ci, Cj);
-    }
-    else if (Cj->NCHILD == 0 || (Ci->R >= Cj->R && Ci->NCHILD != 0))
-    {
-      for (Cell *ci = Ci->CHILD; ci != Ci->CHILD + Ci->NCHILD; ci++)
-      {
-#pragma omp task untied if (ci->NBODY > 1000)
-        horizontalPass_low(ci, Cj);
-      }
-    }
-    else
-    {
-      for (Cell *cj = Cj->CHILD; cj != Cj->CHILD + Cj->NCHILD; cj++)
-      {
-        horizontalPass_low(Ci, cj);
-      }
-    }
-  }
-
-  //! Horizontal pass interface
-  void horizontalPass_low(Cells &icells, Cells &jcells)
-  {
-#pragma omp parallel
-#pragma omp single nowait
-    {
-      horizontalPass_low(&icells[0], &jcells[0]);
-    }
+#ifdef DEBUG
+start("cuP2P");
+#endif
+      if(!is_low && get_steps) cufmm::cuP2P_launch<cufmm::Implementation::standard>(dev_bodies);
+      if(!is_low && !get_steps) cufmm::cuP2P_launch<cufmm::Implementation::simple>(dev_bodies);
+#ifdef DEBUG
+stop("cuP2P");
+#endif
+      cufmm::bodies_D2H(dev_bodies, exafmm::bodies);
+      cufmm::device_bodies_free(dev_bodies);
   }
 
   void directPass(Cell *Ci, Cell *Cj, bool get_steps)

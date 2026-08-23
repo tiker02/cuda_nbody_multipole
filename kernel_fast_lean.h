@@ -740,7 +740,7 @@ namespace exafmm
     complex_t c_multipole[NTERM];
 
 #ifndef MINIBALL
-    max_r2  = 1e-6 * C->R * C->R;
+    real_t max_r2  = 1e-6 * C->R * C->R;
 #endif
 
     for(Body * B = C->BODY; B != C->BODY + C->NBODY; B++)
@@ -1546,7 +1546,7 @@ namespace exafmm
 	    real_t R2 = norm(dX);
 
 	    if(R2 > 0)
-	      invR2 = Bj[j].q / R2;
+	      invR2 += Bj[j].q / R2;
 	  }
 
 #pragma omp atomic

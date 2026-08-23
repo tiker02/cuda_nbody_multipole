@@ -6,7 +6,7 @@
 #include <math.h>  /*isnan, sqrt, atan2 */
 #include <stdio.h> /*printf */
 
-#include "vectorclass/vectorclass.h"
+//#include "vectorclass/vectorclass.h"
 #ifndef DOUBLE_P2P
 #define NSIMD 16
 #else
@@ -18,9 +18,9 @@
 #endif
 
 #ifdef SIMD_M2L
-#include "kernel_rotate_two_arrays.h"
+#include "../kernel_rotate_two_arrays.h"
 #else
-#include "kernel_rotate.h"
+#include "../kernel_rotate.h"
 #endif
 
 namespace exafmm

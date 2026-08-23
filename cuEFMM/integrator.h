@@ -4,6 +4,7 @@
 #include "kernel_fast_lean.h"
 #include "traverse_eager.h"
 #include "timer.h"
+#include "EFMM.cuh"
 
 #define MAXLEVEL 64
 
@@ -204,6 +205,7 @@ void kick_naive(int rung, struct sys sinks, struct sys sources1, struct sys sour
   bodies.clear();
   bodies.resize(sinks.n + sources1.n + sources2.n);
 
+
   for (unsigned int i = 0; i < sinks.n; i++)
   {
     for (int d = 0; d < 3; d++)
@@ -255,6 +257,11 @@ void kick_naive(int rung, struct sys sinks, struct sys sources1, struct sys sour
 #if DEBUG
   stop("Prepare");
 #endif
+  std::cout << bodies.size() << std::endl;
+  cufmm::Bodies d_bodies = cufmm::device_bodies_alloc(bodies.size());
+  cufmm::bodies_H2D(bodies, d_bodies);
+  cufmm::bodies_D2H(d_bodies, bodies);
+  cufmm:: device_bodies_free(d_bodies);
 
   get_force_and_potential(bodies, update_timestep);
 
@@ -497,7 +504,7 @@ void get_force_and_potential(Bodies &bodies, bool get_steps)
 #if DEBUG
     start("horizontalPass_low");
 #endif
-    horizontalPass_low(cells, cells);
+    horizontalPass(cells, cells, false, true, false);
 #if DEBUG
     stop("horizontalPass_low");
 #endif
@@ -553,7 +560,7 @@ void get_force_and_potential(Bodies &bodies, bool get_steps)
 #if DEBUG
     start("horizontalPass");
 #endif
-    horizontalPass(cells, cells, 1, get_steps);
+    horizontalPass(cells, cells, true, false, get_steps);
 #if DEBUG
     stop("horizontalPass");
 #endif

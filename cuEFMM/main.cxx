@@ -11,7 +11,7 @@
 #include "kernel_fast_lean.h"
 #include "timer.h"
 #include "traverse_eager.h"
-#include "load_gadget.h"
+#include "../load_gadget.h"
 #include "io.h"
 
 using namespace std;

@@ -36,6 +36,7 @@ target_compile_definitions(Taichi PRIVATE
 # Where to find the headers (-I)
 target_include_directories(Taichi PRIVATE 
     /u/sw/toolchains/gcc-glibc/11.2.0/pkgs/hdf5/1.12.0/include
+    ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
 )
 
 # Where to find the libraries (-L)
@@ -49,4 +50,5 @@ target_link_libraries(Taichi PRIVATE
     z 
     m 
     OpenMP::OpenMP_CXX
+    ${CMAKE_DL_LIBS}
 )
