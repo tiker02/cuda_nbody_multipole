@@ -1,11 +1,10 @@
-# taichi_collisional
-An N-body code for star cluster simulations. The code uses an adaptive (octree) Fast Multipole Method to compute gravity, therefore $\mathcal{O}(N)$ instead of pairwise summations ($N^2$). The multipole-to-local (M2L) translations uses a $\mathcal{O}(p^3)$ method by rotating the multipoles in the direction of the seperation vector. The particle-to-particle kernel uses a vectorized version. For more details, see (Mukherjee 2021 ApJ, arxiv:2012.02207).
+# Taichi GPU: Accelerated Fast Multipole Method
 
--Much of the code is based on exafmm (https://github.com/exafmm/exafmm). Solid spherical harmonics is adopted over the original formulation (See Dehnen 2014). 
+## Academic Context & Attribution
+This repository was developed strictly for academic purposes as part of a university project. 
 
--The master folder contains the code used in the ApJ paper.
+It builds directly upon the original **Taichi / ExaFMM** implementation by **Q. Zhu** ([original repository link here](https://github.com/QirongZhu/taichi_collisional)). The primary objective of this project is to extend the existing codebase by designing, porting, and optimizing CUDA-accelerated GPU kernels  to evaluate heterogeneous performance and parallel efficiency. 
 
--The speed folder includes a fourth-order integrator (arxiv:2011.14984), which improves the energy conservation. The gradient force is approximated using the extraplation method of Omelyan 2006. See also Farr2007. 
-
+All original algorithms, core architecture, and foundation code remain the intellectual property of Q. Zhu and the original authors.
 
 
