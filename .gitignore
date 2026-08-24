@@ -1,4 +1,4 @@
 build
-run_*
+data
 *.log
-plummer_data_gen
+snapshot*
