@@ -336,6 +336,7 @@ namespace cufmm{
             exafmm::real_t pot = 0;
             exafmm::real_t acc_old_i = 0;
             exafmm::real_t ts_accum = 0;
+            exafmm::real_t dt_scale = dt_param * M_SQRT1_2;
 
             exafmm::real_t dX, dY, dZ;
             exafmm::real_t dVx, dVy, dVz;
@@ -368,10 +369,12 @@ namespace cufmm{
                     
                     exafmm::real_t R2 = dX*dX + dY*dY + dZ*dZ;
 
-					if (R2 > 0)
-					{
-						exafmm::real_t R = sqrt(R2);
-
+                    if (R2 > 0)
+                    {
+                        //math operations in the following blocks might look odd:
+                        //optimizations were performed to reduce as much as possible MUFU instructions 
+                        exafmm::real_t invR = rsqrt(R2);
+                        
                         if constexpr(impl == Implementation::standard)
                         {
                             dVx = bodies.Vx[j] - Vxi;
@@ -379,41 +382,44 @@ namespace cufmm{
                             dVz = bodies.Vz[j] - Vzi;						
                         
                             exafmm::real_t v2 = dVx*dVx + dVy*dVy + dVz*dVz;                    
-						    exafmm::real_t vdotdr2 = (dX * dVx + dY * dVy + dZ * dVz)/R2;
+                            exafmm::real_t vdotdr2 = (dX * dVx + dY * dVy + dZ * dVz) * invR;
 
-						    exafmm::real_t tau = dt_param / M_SQRT2 * sqrt(R * R2 / (qi + bodies.q[j]));
-						    exafmm::real_t dtau = 3 * tau * vdotdr2 / 2;
-                            if (dtau > 1) dtau = 1;
-                            tau /= (1 - dtau / 2);
+                            exafmm::real_t invR3 = invR*invR*invR;
+                            exafmm::real_t tau = dt_scale * rsqrt( invR3 * (qi + bodies.q[j]));
+                            exafmm::real_t half_dtau = 0.75 * tau * vdotdr2;
+                            if (half_dtau > 0.5) half_dtau = 0.5;
+                            exafmm::real_t t = 1.0 / (1.0 - half_dtau);
+                            tau *= t;
                             if (tau < timestep) timestep = tau;
 
                             if (v2 > 0)
-						    {
-							    tau = dt_param * R / sqrt(v2);
-							    dtau = tau * vdotdr2 * (1 + (qi + bodies.q[j]) / (v2 * R));
-						    
-                                if (dtau > 1) dtau = 1;
-                                tau /= (1 - dtau / 2);
+                            {
+                                exafmm::real_t R = R2 * invR;
+                                exafmm::real_t inv_v = rsqrt(v2);
+                                tau = dt_param * R * inv_v;
+                                half_dtau = 0.5 * tau * vdotdr2 * (1.0 + (qi + bodies.q[j]) * inv_v * inv_v * invR);
+                                
+                                if (half_dtau > 0.5) half_dtau = 0.5;
+                                t = 1.0 / (1.0 - half_dtau);
+                                tau *= t;
                                 if (tau < timestep) timestep = tau;
                             }
                         }
 
-
-						exafmm::real_t invR2 = 1.0 / R2;
-
+                        exafmm::real_t invR2 = invR * invR;
 
                         if constexpr(impl == Implementation::low)
                         {
                             acc_old_i += bodies.q[j] * invR2;
                         }else
                         {
-                            exafmm::real_t invR = bodies.q[j] * sqrt(invR2) * bodies.issource[j];
-                            pot += invR;
+                            exafmm::real_t d_pot = bodies.q[j] * invR * bodies.issource[j];
+                            pot += d_pot;
                             
-                            exafmm::real_t mult = invR2 * invR;
+                            exafmm::real_t mult = invR2 * d_pot;
                             dX *= mult;  dY *= mult;  dZ *= mult;
                             ax += dX;    ay += dY;    az += dZ; 
-                        }                       
+                        }                                                 
                     }
                 }
 
