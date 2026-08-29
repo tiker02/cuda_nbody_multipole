@@ -67,12 +67,14 @@ target_link_libraries(taichi_cpu PRIVATE
 add_executable(taichi_gpu
     src/cuda/main_gpu.cxx
     src/cuda/EFMM.cu
+    src/cuda/interactions.cu
 )
 
 target_include_directories(taichi_gpu BEFORE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/data_tables
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cuda
+    ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
     ${HDF5_INCLUDE_DIRS}
 )
 
