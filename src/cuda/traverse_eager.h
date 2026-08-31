@@ -198,6 +198,7 @@ namespace exafmm
 #ifdef DEBUG
       start("cuP2P");
 #endif
+      cufmm::interaction_mgr.load_balance();
       cufmm::cuP2P_launch<cufmm::Implementation::low>(dev_bodies);
 #ifdef DEBUG
       stop("cuP2P");
@@ -232,10 +233,12 @@ namespace exafmm
         horizontalPass<TraversalMode::Standard>(&icells[0], &jcells[0], false, get_steps);
       }
     }
+
 #ifdef DEBUG
     start("cuP2P");
 #endif
-    if (!is_low && get_steps)
+      cufmm::interaction_mgr.load_balance();
+      if (!is_low && get_steps)
       cufmm::cuP2P_launch<cufmm::Implementation::standard>(dev_bodies);
     if (!is_low && !get_steps)
       cufmm::cuP2P_launch<cufmm::Implementation::simple>(dev_bodies);

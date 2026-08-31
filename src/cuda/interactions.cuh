@@ -9,15 +9,28 @@ namespace cufmm
 {
     enum interaction { P2P, M2L };
 
+    constexpr int pw_inter_threshold = 32;
+
+    // Single work package assigned to 1 thread block
+    struct P2PTask {
+        int target_body_offset;  // Global index of first target body in this chunk
+        int target_chunk_size;   // Number of target bodies
+        int source_list_offset;  // Starting index in flat source arrays
+        int num_source_cells;    // Number of Cj cells in this source bin
+        int requires_atomic;     // 1 if multiple blocks process this target slice, 0 otherwise
+    };
+
     // Lightweight POD struct passed to CUDA kernels by value
     struct DeviceInteractionView {
-        unsigned int n_p2p_targets;
-        const unsigned int* __restrict__ target_body_offset;
-        const unsigned int* __restrict__ target_size;
-        const unsigned int* __restrict__ offset;
-        const unsigned int* __restrict__ n_int_p2p;
-        const unsigned int* __restrict__ source_body_offset;
-        const unsigned int* __restrict__ source_size;
+        int num_tasks;
+        const P2PTask* __restrict__ tasks;
+        const int* __restrict__ source_body_offset;
+        const int* __restrict__ source_size;
+    };
+
+    struct DualDeviceInteractionView {
+        DeviceInteractionView heavy;
+        DeviceInteractionView light;
     };
 
     class InteractionManager {
@@ -34,38 +47,42 @@ namespace cufmm
         void add_interaction(const exafmm::Cell& Ci, const exafmm::Cell& Cj, interaction type, bool exploring);
         
         // GPU Data Management
-        DeviceInteractionView upload_to_device(cudaStream_t stream = 0);
+        DualDeviceInteractionView upload_to_device(cudaStream_t stream_heavy = 0, cudaStream_t stream_light = 0);
         void free_device();
         void reset();
 
-        unsigned int get_num_targets() const { return n_p2p_targets; }
-        unsigned int get_total_p2p() const   { return total_p2p; }
+        int get_num_targets() const { return n_p2p_targets; }
+        int get_total_p2p() const   { return total_p2p; }
         int get_num_cells() const            { return n_cells; }
+        void load_balance();
+
 
     private:
+        int num_sm;
         int n_cells;                                         // Total number of cells in the tree
-        unsigned int n_p2p_targets;                          // Number of target cells involved in P2P interactions             
-        unsigned int total_p2p;                              // Total number of P2P interactions
+        int n_p2p_targets;                          // Number of target cells involved in P2P interactions             
+        int total_p2p;                              // Total number of P2P interactions
+        int total_p2p_pw;
 
-        // Host Exploration arrays (Indexed by cell ID)
-        unsigned int* h_n_int_p2p;                          // Number of P2P interactions per cell
-        unsigned int* h_target_body_offset;                 // Starting index of Ci's bodies in the global array
-        unsigned int* h_target_size;                        // Number of bodies in Ci
-        unsigned int* h_offset;                             // Where Ci's list starts in the flat source arrays
-        unsigned int* h_saved_interactions;                 // Running tracker of how many Cj's Ci has written
+        int* h_n_int_p2p;                          // Number of P2P interactions per cell
+        int* h_target_body_offset;                 // Starting index of Ci's bodies in the global array
+        int* h_target_size;                        // Number of bodies in Ci
+        int* h_offset;                             // Where Ci's list starts in the flat source arrays
+        int* h_saved_interactions;                 // Running tracker of how many Cj's Ci has written
 
-        // Host Flat Source arrays (Size: total_p2p)
-        unsigned int* h_source_body_offset;                 // Flat array of Cj body offsets
-        unsigned int* h_source_size;                        // Flat array of Cj body counts
+        int* h_source_body_offset;                 // Flat array of Cj body offsets
+        int* h_source_size;                        // Flat array of Cj body counts
 
+        std::vector<P2PTask> h_tasks_heavy;
+        std::vector<P2PTask> h_tasks_light;
         // Device Memory Pointers
-        unsigned int* d_target_body_offset;
-        unsigned int* d_target_size;
-        unsigned int* d_offset;
-        unsigned int* d_n_int_p2p;
-        unsigned int* d_source_body_offset;
-        unsigned int* d_source_size;
+        P2PTask* d_tasks_heavy;
+        P2PTask* d_tasks_light;
+        int* d_source_body_offset;
+        int* d_source_size;
 
+        void load_balance_stats(int target_workload, const std::vector<P2PTask>& h_tasks) const;
+        int target_workload(int total_pairs);
         void free_host();
     };
 

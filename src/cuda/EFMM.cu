@@ -213,14 +213,20 @@ namespace cufmm{
         double dt_param
     )
     {
-        int target_cell = blockIdx.x;
-        int target_body_offset = interactions.target_body_offset[target_cell];
-        int target_size = interactions.target_size[target_cell];
+        const int task_id = blockIdx.x;
+        if (task_id >= interactions.num_tasks) return;
 
-        int i = threadIdx.x;
+        const P2PTask task = interactions.tasks[task_id];
 
-        if(i < target_size)
+        const int lane_id = threadIdx.x; 
+        const int warp_id = threadIdx.y;
+        const int num_warps = blockDim.y;
+
+        const int total_targets = task.target_chunk_size;
+
+        for(int i = warp_id; i < total_targets; i += num_warps)
         {
+            int target_idx = task.target_body_offset + i;
             exafmm::real_t ax = 0;
             exafmm::real_t ay = 0;
             exafmm::real_t az = 0;
@@ -232,26 +238,26 @@ namespace cufmm{
             exafmm::real_t dX, dY, dZ;
             exafmm::real_t dVx, dVy, dVz;
 
-            exafmm::real_t Xi = bodies.x[target_body_offset + i];
-            exafmm::real_t Yi = bodies.y[target_body_offset + i];
-            exafmm::real_t Zi = bodies.z[target_body_offset + i];
+            exafmm::real_t Xi = bodies.x[target_idx];
+            exafmm::real_t Yi = bodies.y[target_idx];
+            exafmm::real_t Zi = bodies.z[target_idx];
 
             exafmm::real_t Vxi, Vyi, Vzi, qi;
    
             if constexpr(impl == Implementation::standard)
             {
-                Vxi = bodies.Vx[target_body_offset + i];
-                Vyi = bodies.Vy[target_body_offset + i];
-                Vzi = bodies.Vz[target_body_offset + i];
-                qi = bodies.q[target_body_offset + i];
+                Vxi = bodies.Vx[target_idx];
+                Vyi = bodies.Vy[target_idx];
+                Vzi = bodies.Vz[target_idx];
+                qi = bodies.q[target_idx];
             }
 
-            for(int inter = 0; inter < interactions.n_int_p2p[target_cell]; inter++)
+            for(int cj = 0; cj < task.num_source_cells; cj++)
             {
                 exafmm::real_t timestep = 1e38;
-                unsigned int base = interactions.offset[target_cell];
-                unsigned int source_body_base = interactions.source_body_offset[base + inter];
-                for(int j = source_body_base; j < source_body_base + interactions.source_size[base + inter] && j < bodies.N; j++)
+                int base = task.source_list_offset;
+                int source_body_base = interactions.source_body_offset[base + cj];                                                   
+                for(int j = source_body_base + lane_id; j < source_body_base + interactions.source_size[base + cj] && j < bodies.N; j += blockDim.x)  //warp size
                 {
                     dX = bodies.x[j] - Xi;
                     dY = bodies.y[j] - Yi;
@@ -323,16 +329,17 @@ namespace cufmm{
                 }
             }
 
-            if constexpr(impl == Implementation::low)
+            if constexpr (impl == Implementation::low) 
             {
-                bodies.acc_old[target_body_offset + i] += acc_old_i;
-            }else if(bodies.issink[target_body_offset + i])
+                atomicAdd(&bodies.acc_old[target_idx], acc_old_i);
+            } 
+            else if (bodies.issink[target_idx]) 
             {
-                bodies.p[target_body_offset + i] += pot;
-                bodies.Fx[target_body_offset + i] += ax;
-                bodies.Fy[target_body_offset + i] += ay;
-                bodies.Fz[target_body_offset + i] += az;
-                bodies.timestep[target_body_offset + i] += ts_accum;
+                atomicAdd(&bodies.p[target_idx], pot);
+                atomicAdd(&bodies.Fx[target_idx], ax);
+                atomicAdd(&bodies.Fy[target_idx], ay);
+                atomicAdd(&bodies.Fz[target_idx], az);
+                atomicAdd(&bodies.timestep[target_idx], ts_accum);
             }
         }
     }
@@ -340,23 +347,56 @@ namespace cufmm{
     template<Implementation impl>
     void cuP2P_launch(cufmm::Bodies d_bodies)
     {
-        nvtxRangePushA("P2P launch");
-        cufmm::DeviceInteractionView d_inter = cufmm::interaction_mgr.upload_to_device();
-        CHECK(cudaDeviceSynchronize());
-        nvtxRangePushA("Kernel and async");
+        cudaStream_t stream_heavy, stream_light;
+        CHECK(cudaStreamCreateWithFlags(&stream_heavy, cudaStreamNonBlocking));
+        CHECK(cudaStreamCreateWithFlags(&stream_light, cudaStreamNonBlocking));
 
-        // 1 Block per active target cell
-        int num_blocks = interaction_mgr.get_num_targets();
-        int threads_per_block = exafmm::ncrit; 
+        // Event to synchronize shared source tables between streams (see upload_to_device function)
+        cudaEvent_t event_sources_uploaded;
+        CHECK(cudaEventCreateWithFlags(&event_sources_uploaded, cudaEventDisableTiming));
 
-        cuP2P<impl><<<num_blocks, threads_per_block>>>(
-            d_bodies,
-            d_inter,
-            exafmm::dt_param
-        );
-        CHECK_KERNELCALL();
-        CHECK(cudaDeviceSynchronize());
+        // (asynchronous)
+        nvtxRangePushA("H2D Task Uploads");
+        cufmm::DualDeviceInteractionView d_inter = cufmm::interaction_mgr.upload_to_device(stream_heavy, stream_light);
+        
+        CHECK(cudaEventRecord(event_sources_uploaded, stream_heavy));
+        CHECK(cudaStreamWaitEvent(stream_light, event_sources_uploaded, 0));
         nvtxRangePop();
+
+
+
+        nvtxRangePushA("Concurrent Kernels");
+        
+        //warp granularity executions
+        dim3 threads_heavy(32, exafmm::ncrit / 32);
+        dim3 threads_light(32, 2);                  
+
+        if (d_inter.heavy.num_tasks > 0) {
+            cuP2P<impl><<<d_inter.heavy.num_tasks, threads_heavy, 0, stream_heavy>>>(
+                d_bodies,
+                d_inter.heavy,
+                exafmm::dt_param
+            );
+        }
+
+        if (d_inter.light.num_tasks > 0) {
+            cuP2P<impl><<<d_inter.light.num_tasks, threads_light, 0, stream_light>>>(
+                d_bodies,
+                d_inter.light,
+                exafmm::dt_param
+            );
+        }
+
+        CHECK_KERNELCALL();
+
+        CHECK(cudaStreamSynchronize(stream_heavy));
+        CHECK(cudaStreamSynchronize(stream_light));
+        nvtxRangePop();
+
+        CHECK(cudaEventDestroy(event_sources_uploaded));
+        CHECK(cudaStreamDestroy(stream_heavy));
+        CHECK(cudaStreamDestroy(stream_light));
+
         interaction_mgr.reset();
         nvtxRangePop();
     }
