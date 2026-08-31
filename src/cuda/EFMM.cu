@@ -370,6 +370,13 @@ namespace cufmm{
 
                 if constexpr(impl == Implementation::standard)
                 {
+                    //reducing on timestep: in sequential execution, it should be the min across the
+                    //interactions with the source
+                    #pragma unroll
+                    for (int offset = 16; offset > 0; offset /= 2) {
+                        exafmm::real_t other_ts = __shfl_down_sync(0xFFFFFFFF, timestep, offset);
+                        if (other_ts < timestep) timestep = other_ts;
+                    }
                     timestep *= timestep;
                     timestep *= timestep;
                     timestep = (exafmm::real_t)1 / timestep;
@@ -389,7 +396,7 @@ namespace cufmm{
                     atomicAdd(&bodies.Fx[target_idx], ax);
                     atomicAdd(&bodies.Fy[target_idx], ay);
                     atomicAdd(&bodies.Fz[target_idx], az);
-                    atomicAdd(&bodies.timestep[target_idx], ts_accum);
+                    if(lane_id == 0) atomicAdd(&bodies.timestep[target_idx], ts_accum);
                 }
             }
         }
