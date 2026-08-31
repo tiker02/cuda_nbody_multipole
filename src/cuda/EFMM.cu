@@ -27,7 +27,7 @@ namespace cufmm{
     void bodies_H2D(exafmm::Bodies& h_b, cufmm::Bodies& d_b)
     {
         nvtxRangePushA("Data transfers to device");
-        unsigned int N = h_b.size();
+        int N = h_b.size();
         size_t bytes = N * sizeof(exafmm::real_t);
         size_t bool_bytes = N * sizeof(bool);
 
@@ -48,40 +48,40 @@ namespace cufmm{
         // ASYNCHRONOUS PIPELINE
         // ==========================================
         nvtxRangePushA("Asynchronous Transfer");
-        for (unsigned int i = 0; i < N; i++) stage0[i] = h_b[i].X[0];
+        for (int i = 0; i < N; i++) stage0[i] = h_b[i].X[0];
         CHECK(cudaMemcpyAsync(d_b.x, stage0, bytes, cudaMemcpyHostToDevice, stream0));
 
-        for (unsigned int i = 0; i < N; i++) stage1[i] = h_b[i].X[1];
+        for (int i = 0; i < N; i++) stage1[i] = h_b[i].X[1];
         CHECK(cudaMemcpyAsync(d_b.y, stage1, bytes, cudaMemcpyHostToDevice, stream1));
 
 
         CHECK(cudaStreamSynchronize(stream0));
-        for (unsigned int i = 0; i < N; i++) stage0[i] = h_b[i].X[2];
+        for (int i = 0; i < N; i++) stage0[i] = h_b[i].X[2];
         CHECK(cudaMemcpyAsync(d_b.z, stage0, bytes, cudaMemcpyHostToDevice, stream0));
 
         CHECK(cudaStreamSynchronize(stream1));
-        for (unsigned int i = 0; i < N; i++) stage1[i] = h_b[i].q;
+        for (int i = 0; i < N; i++) stage1[i] = h_b[i].q;
         CHECK(cudaMemcpyAsync(d_b.q, stage1, bytes, cudaMemcpyHostToDevice, stream1));
 
         CHECK(cudaStreamSynchronize(stream0));
-        for (unsigned int i = 0; i < N; i++) stage0[i] = h_b[i].V[0];
+        for (int i = 0; i < N; i++) stage0[i] = h_b[i].V[0];
         CHECK(cudaMemcpyAsync(d_b.Vx, stage0, bytes, cudaMemcpyHostToDevice, stream0));
 
         CHECK(cudaStreamSynchronize(stream1));
-        for (unsigned int i = 0; i < N; i++) stage1[i] = h_b[i].V[1];
+        for (int i = 0; i < N; i++) stage1[i] = h_b[i].V[1];
         CHECK(cudaMemcpyAsync(d_b.Vy, stage1, bytes, cudaMemcpyHostToDevice, stream1));
 
         CHECK(cudaStreamSynchronize(stream0));
-        for (unsigned int i = 0; i < N; i++) stage0[i] = h_b[i].V[2];
+        for (int i = 0; i < N; i++) stage0[i] = h_b[i].V[2];
         CHECK(cudaMemcpyAsync(d_b.Vz, stage0, bytes, cudaMemcpyHostToDevice, stream0));
 
         
         CHECK(cudaStreamSynchronize(stream1));
-        for (unsigned int i = 0; i < N; i++) b_stage1[i] = h_b[i].issink;
+        for (int i = 0; i < N; i++) b_stage1[i] = h_b[i].issink;
         CHECK(cudaMemcpyAsync(d_b.issink, b_stage1, bool_bytes, cudaMemcpyHostToDevice, stream1));
 
         CHECK(cudaStreamSynchronize(stream0));
-        for (unsigned int i = 0; i < N; i++) b_stage0[i] = h_b[i].issource;
+        for (int i = 0; i < N; i++) b_stage0[i] = h_b[i].issource;
         CHECK(cudaMemcpyAsync(d_b.issource, b_stage0, bool_bytes, cudaMemcpyHostToDevice, stream0));
 
 
@@ -107,7 +107,7 @@ namespace cufmm{
 
     void bodies_D2H(const Bodies& d_b, std::vector<exafmm::Body>& aos) {
         nvtxRangePushA("Data transfers to host");
-        unsigned int N = aos.size();
+        int N = aos.size();
         if (N == 0) return;
 
         size_t bytes = N * sizeof(exafmm::real_t);
@@ -125,30 +125,30 @@ namespace cufmm{
         CHECK(cudaMemcpyAsync(stage1, d_b.Fy, bytes, cudaMemcpyDeviceToHost, stream1));
 
         CHECK(cudaStreamSynchronize(stream0));
-        for (unsigned int i = 0; i < N; i++) aos[i].F[0] += stage0[i];
+        for (int i = 0; i < N; i++) aos[i].F[0] += stage0[i];
 
         CHECK(cudaMemcpyAsync(stage0, d_b.Fz, bytes, cudaMemcpyDeviceToHost, stream0));
 
         CHECK(cudaStreamSynchronize(stream1));
-        for (unsigned int i = 0; i < N; i++) aos[i].F[1] += stage1[i];
+        for (int i = 0; i < N; i++) aos[i].F[1] += stage1[i];
 
         CHECK(cudaMemcpyAsync(stage1, d_b.p, bytes, cudaMemcpyDeviceToHost, stream1));
 
         CHECK(cudaStreamSynchronize(stream0));
-        for (unsigned int i = 0; i < N; i++) aos[i].F[2] += stage0[i];
+        for (int i = 0; i < N; i++) aos[i].F[2] += stage0[i];
 
         CHECK(cudaMemcpyAsync(stage0, d_b.acc_old, bytes, cudaMemcpyDeviceToHost, stream0));
 
         CHECK(cudaStreamSynchronize(stream1));
-        for (unsigned int i = 0; i < N; i++) aos[i].p += stage1[i];
+        for (int i = 0; i < N; i++) aos[i].p += stage1[i];
 
         CHECK(cudaMemcpyAsync(stage1, d_b.timestep, bytes, cudaMemcpyDeviceToHost, stream1));
 
         CHECK(cudaStreamSynchronize(stream0));
-        for (unsigned int i = 0; i < N; i++) aos[i].acc_old += stage0[i];
+        for (int i = 0; i < N; i++) aos[i].acc_old += stage0[i];
 
         CHECK(cudaStreamSynchronize(stream1));
-        for (unsigned int i = 0; i < N; i++) aos[i].timestep += stage1[i];
+        for (int i = 0; i < N; i++) aos[i].timestep += stage1[i];
         nvtxRangePop();
 
         CHECK(cudaFreeHost(stage0));
@@ -210,7 +210,7 @@ namespace cufmm{
     __global__ void cuP2P(
         cufmm::Bodies bodies,
         cufmm::DeviceInteractionView interactions,
-        double dt_param
+        exafmm::real_t dt_param
     )
     {
         const int task_id = blockIdx.x;
@@ -218,15 +218,34 @@ namespace cufmm{
 
         const P2PTask task = interactions.tasks[task_id];
 
+        const int tid      = threadIdx.y * blockDim.x + threadIdx.x;
         const int lane_id = threadIdx.x; 
         const int warp_id = threadIdx.y;
         const int num_warps = blockDim.y;
+        const int block_sz = blockDim.x * blockDim.y;
+
+        constexpr int TILE_SIZE = 128;
+        constexpr int STANDARD_TILE = (impl == Implementation::standard)? TILE_SIZE : 1; // unfortunately the compiler does not allow 0
+        __shared__ exafmm::real_t s_x[TILE_SIZE];
+        __shared__ exafmm::real_t s_y[TILE_SIZE];
+        __shared__ exafmm::real_t s_z[TILE_SIZE];
+        __shared__ exafmm::real_t s_q[TILE_SIZE];
+        __shared__ bool s_issrc[TILE_SIZE];
+        __shared__ exafmm::real_t s_vx[STANDARD_TILE];
+        __shared__ exafmm::real_t s_vy[STANDARD_TILE];
+        __shared__ exafmm::real_t s_vz[STANDARD_TILE];
 
         const int total_targets = task.target_chunk_size;
 
-        for(int i = warp_id; i < total_targets; i += num_warps)
+        //all warps strided loop on targets
+        for (int t_base = 0; t_base < total_targets; t_base += num_warps)
         {
-            int target_idx = task.target_body_offset + i;
+            int local_target = t_base + warp_id;
+            bool is_valid_target = (local_target < total_targets);
+            // instead of enforcing validity int the loop condition (see previous implementation),
+            // we use this boolean when needed: the purpose is having all threads synchronise when required
+            int target_idx = is_valid_target ? (task.target_body_offset + local_target) : 0;
+
             exafmm::real_t ax = 0;
             exafmm::real_t ay = 0;
             exafmm::real_t az = 0;
@@ -235,88 +254,117 @@ namespace cufmm{
             exafmm::real_t ts_accum = 0;
             exafmm::real_t dt_scale = dt_param * M_SQRT1_2;
 
+            exafmm::real_t Xi, Yi, Zi;
             exafmm::real_t dX, dY, dZ;
             exafmm::real_t dVx, dVy, dVz;
-
-            exafmm::real_t Xi = bodies.x[target_idx];
-            exafmm::real_t Yi = bodies.y[target_idx];
-            exafmm::real_t Zi = bodies.z[target_idx];
-
             exafmm::real_t Vxi, Vyi, Vzi, qi;
-   
-            if constexpr(impl == Implementation::standard)
-            {
-                Vxi = bodies.Vx[target_idx];
-                Vyi = bodies.Vy[target_idx];
-                Vzi = bodies.Vz[target_idx];
-                qi = bodies.q[target_idx];
+
+            if(is_valid_target){
+                Xi = bodies.x[target_idx];
+                Yi = bodies.y[target_idx];
+                Zi = bodies.z[target_idx];
+
+                if constexpr(impl == Implementation::standard)
+                {
+                    Vxi = bodies.Vx[target_idx];
+                    Vyi = bodies.Vy[target_idx];
+                    Vzi = bodies.Vz[target_idx];
+                    qi = bodies.q[target_idx];
+                }
             }
 
             for(int cj = 0; cj < task.num_source_cells; cj++)
             {
                 exafmm::real_t timestep = 1e38;
                 int base = task.source_list_offset;
-                int source_body_base = interactions.source_body_offset[base + cj];                                                   
-                for(int j = source_body_base + lane_id; j < source_body_base + interactions.source_size[base + cj] && j < bodies.N; j += blockDim.x)  //warp size
-                {
-                    dX = bodies.x[j] - Xi;
-                    dY = bodies.y[j] - Yi;
-                    dZ = bodies.z[j] - Zi;                    
+                int source_body_base = interactions.source_body_offset[base + cj];
+                int src_count = interactions.source_size[base + cj];
+                
+                //shmem tiling of source bodies
+                for (int tile_base = 0; tile_base < src_count; tile_base += TILE_SIZE) {
+                    int cur_tile = min(TILE_SIZE, src_count - tile_base);
+                    __syncthreads();
+                    for (int l = tid; l < cur_tile; l += block_sz) {
+                        int g_idx = source_body_base + tile_base + l;
+                        s_x[l] = bodies.x[g_idx];
+                        s_y[l] = bodies.y[g_idx];
+                        s_z[l] = bodies.z[g_idx];
+                        s_q[l] = bodies.q[g_idx];
+                        s_issrc[l] = bodies.issource[g_idx];
+                        if constexpr (impl == Implementation::standard) {
+                            s_vx[l] = bodies.Vx[g_idx];
+                            s_vy[l] = bodies.Vy[g_idx];
+                            s_vz[l] = bodies.Vz[g_idx];
+                        }
+                    }
+                    __syncthreads();
 
-                    
-                    exafmm::real_t R2 = dX*dX + dY*dY + dZ*dZ;
 
-                    if (R2 > 0)
+                    if(is_valid_target)
                     {
-                        //math operations in the following blocks might look odd:
-                        //optimizations were performed to reduce as much as possible MUFU instructions 
-                        exafmm::real_t invR = rsqrt(R2);
-                        
-                        if constexpr(impl == Implementation::standard)
+                   
+                        for(int j = lane_id; j < cur_tile; j += blockDim.x)  //warp size
                         {
-                            dVx = bodies.Vx[j] - Vxi;
-                            dVy = bodies.Vy[j] - Vyi;
-                            dVz = bodies.Vz[j] - Vzi;						
-                        
-                            exafmm::real_t v2 = dVx*dVx + dVy*dVy + dVz*dVz;                    
-                            exafmm::real_t vdotdr2 = (dX * dVx + dY * dVy + dZ * dVz) * invR;
+                            dX = s_x[j] - Xi;
+                            dY = s_y[j] - Yi;
+                            dZ = s_z[j] - Zi;                    
 
-                            exafmm::real_t invR3 = invR*invR*invR;
-                            exafmm::real_t tau = dt_scale * rsqrt( invR3 * (qi + bodies.q[j]));
-                            exafmm::real_t half_dtau = 0.75 * tau * vdotdr2;
-                            if (half_dtau > 0.5) half_dtau = 0.5;
-                            exafmm::real_t t = 1.0 / (1.0 - half_dtau);
-                            tau *= t;
-                            if (tau < timestep) timestep = tau;
+                            
+                            exafmm::real_t R2 = dX*dX + dY*dY + dZ*dZ;
 
-                            if (v2 > 0)
+                            if (R2 > 0)
                             {
-                                exafmm::real_t R = R2 * invR;
-                                exafmm::real_t inv_v = rsqrt(v2);
-                                tau = dt_param * R * inv_v;
-                                half_dtau = 0.5 * tau * vdotdr2 * (1.0 + (qi + bodies.q[j]) * inv_v * inv_v * invR);
+                                //math operations in the following blocks might look odd:
+                                //optimizations were performed to reduce as much as possible MUFU instructions 
+                                exafmm::real_t invR = rsqrt(R2);
                                 
-                                if (half_dtau > 0.5) half_dtau = 0.5;
-                                t = 1.0 / (1.0 - half_dtau);
-                                tau *= t;
-                                if (tau < timestep) timestep = tau;
+                                if constexpr(impl == Implementation::standard)
+                                {
+                                    dVx = s_vx[j] - Vxi;
+                                    dVy = s_vy[j] - Vyi;
+                                    dVz = s_vz[j] - Vzi;						
+                                
+                                    exafmm::real_t v2 = dVx*dVx + dVy*dVy + dVz*dVz;                    
+                                    exafmm::real_t vdotdr2 = (dX * dVx + dY * dVy + dZ * dVz) * invR;
+
+                                    exafmm::real_t invR3 = invR*invR*invR;
+                                    exafmm::real_t tau = dt_scale * rsqrt( invR3 * (qi + s_q[j]));
+                                    exafmm::real_t half_dtau = ((exafmm::real_t) 0.75) * tau * vdotdr2;
+                                    if (half_dtau > ((exafmm::real_t) 0.5)) half_dtau = ((exafmm::real_t)0.5);
+                                    exafmm::real_t t = ((exafmm::real_t)1.0) / (((exafmm::real_t)1.0) - half_dtau);
+                                    tau *= t;
+                                    if (tau < timestep) timestep = tau;
+
+                                    if (v2 > 0)
+                                    {
+                                        exafmm::real_t R = R2 * invR;
+                                        exafmm::real_t inv_v = rsqrt(v2);
+                                        tau = dt_param * R * inv_v;
+                                        half_dtau = ((exafmm::real_t)0.5) * tau * vdotdr2 * (((exafmm::real_t)1.0) + (qi + s_q[j]) * inv_v * inv_v * invR);
+                                        
+                                        if (half_dtau > ((exafmm::real_t) 0.5)) half_dtau = ((exafmm::real_t)0.5);
+                                    exafmm::real_t t = ((exafmm::real_t)1.0) / (((exafmm::real_t)1.0) - half_dtau);
+                                        tau *= t;
+                                        if (tau < timestep) timestep = tau;
+                                    }
+                                }
+
+                                exafmm::real_t invR2 = invR * invR;
+
+                                if constexpr(impl == Implementation::low)
+                                {
+                                    acc_old_i += s_q[j] * invR2;
+                                }else
+                                {
+                                    exafmm::real_t d_pot = s_q[j] * invR * s_issrc[j];
+                                    pot += d_pot;
+                                    
+                                    exafmm::real_t mult = invR2 * d_pot;
+                                    dX *= mult;  dY *= mult;  dZ *= mult;
+                                    ax += dX;    ay += dY;    az += dZ; 
+                                }                                                 
                             }
                         }
-
-                        exafmm::real_t invR2 = invR * invR;
-
-                        if constexpr(impl == Implementation::low)
-                        {
-                            acc_old_i += bodies.q[j] * invR2;
-                        }else
-                        {
-                            exafmm::real_t d_pot = bodies.q[j] * invR * bodies.issource[j];
-                            pot += d_pot;
-                            
-                            exafmm::real_t mult = invR2 * d_pot;
-                            dX *= mult;  dY *= mult;  dZ *= mult;
-                            ax += dX;    ay += dY;    az += dZ; 
-                        }                                                 
                     }
                 }
 
@@ -329,17 +377,20 @@ namespace cufmm{
                 }
             }
 
-            if constexpr (impl == Implementation::low) 
+            if(is_valid_target)
             {
-                atomicAdd(&bodies.acc_old[target_idx], acc_old_i);
-            } 
-            else if (bodies.issink[target_idx]) 
-            {
-                atomicAdd(&bodies.p[target_idx], pot);
-                atomicAdd(&bodies.Fx[target_idx], ax);
-                atomicAdd(&bodies.Fy[target_idx], ay);
-                atomicAdd(&bodies.Fz[target_idx], az);
-                atomicAdd(&bodies.timestep[target_idx], ts_accum);
+                if constexpr (impl == Implementation::low) 
+                {
+                    atomicAdd(&bodies.acc_old[target_idx], acc_old_i);
+                } 
+                else if (bodies.issink[target_idx]) 
+                {
+                    atomicAdd(&bodies.p[target_idx], pot);
+                    atomicAdd(&bodies.Fx[target_idx], ax);
+                    atomicAdd(&bodies.Fy[target_idx], ay);
+                    atomicAdd(&bodies.Fz[target_idx], az);
+                    atomicAdd(&bodies.timestep[target_idx], ts_accum);
+                }
             }
         }
     }

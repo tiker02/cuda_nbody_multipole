@@ -213,13 +213,13 @@ namespace exafmm
 		  {
 		    m2 = m * m;
 		    Tnm[indexnew + m] =
-		      invr2 * (2 * n - 1.) * dX[2] * Tnm[indexstart + m] -
+		      invr2 * (2 * n - (real_t) 1.) * dX[2] * Tnm[indexstart + m] -
 		      invr2 * ((n - 1) * (n - 1) * (n > 1) - m * m) * Tnm[n2 - 3 * n + 2 + m];
 		  }
 	      }
 
 	    m = n - 1;
-	    Tnm[indexnew + m] = invr2 * (2 * n - 1.) * dX[2] * Tnm[indexstart + m];
+	    Tnm[indexnew + m] = invr2 * (2 * n - (real_t) 1.) * dX[2] * Tnm[indexstart + m];
 	  }
 
 	real_t oddoreven = -1;
@@ -251,7 +251,7 @@ namespace exafmm
 	  {
 	    m2 = n2 - m * m;
 	    Gnm[indexnew + m] =
-	      (2 * n - 1.) / m2 * dX[2] * Gnm[indexstart + m] - r2 / m2 * Gnm[n2 - 3 * n + 2 + m];
+	      (2 * n - (real_t) 1.) / m2 * dX[2] * Gnm[indexstart + m] - r2 / m2 * Gnm[n2 - 3 * n + 2 + m];
 	  }
 		
 	Gnm[indexnew + n - 1] = dX[2] * Gnm[indexstart + n - 1];
