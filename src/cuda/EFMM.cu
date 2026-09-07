@@ -2,6 +2,7 @@
 #include "interactions.cuh"
 #include <cuda_runtime.h>
 #include <nvtx3/nvToolsExt.h>
+#include <cuda/std/cmath>
 #include <cstdio>
 
 #define CHECK(call)                                                                 \
@@ -213,8 +214,12 @@ namespace cufmm{
         exafmm::real_t dt_param
     )
     {
+        asm volatile (".pragma \"enable_smem_spilling\";");
+
         const int task_id = blockIdx.x;
         if (task_id >= interactions.num_tasks) return;
+
+        exafmm::real_t dt_scale = dt_param * M_SQRT1_2;
 
         const P2PTask task = interactions.tasks[task_id];
 
@@ -223,8 +228,12 @@ namespace cufmm{
         const int warp_id = threadIdx.y;
         const int num_warps = blockDim.y;
         const int block_sz = blockDim.x * blockDim.y;
+        const int total_targets = task.target_chunk_size;
+        //WARNING: OPTIMIZED TO REQUIRE <= warpSize
+        const int warp_targets = (total_targets + num_warps - 1) / num_warps;
 
-        constexpr int TILE_SIZE = 128;
+
+        constexpr int TILE_SIZE = 256;
         constexpr int STANDARD_TILE = (impl == Implementation::standard)? TILE_SIZE : 1; // unfortunately the compiler does not allow 0
         __shared__ exafmm::real_t s_x[TILE_SIZE];
         __shared__ exafmm::real_t s_y[TILE_SIZE];
@@ -235,168 +244,268 @@ namespace cufmm{
         __shared__ exafmm::real_t s_vy[STANDARD_TILE];
         __shared__ exafmm::real_t s_vz[STANDARD_TILE];
 
-        const int total_targets = task.target_chunk_size;
+        // this implementation assigns a warp to each target body. Because of block size limits,
+        // we are required to do "warp coarsening". With the introduction of warp shuffling optimization,
+        // the first warp_targets threads of each warp will store a specific target's data (t_) for the whole execution...
+        int local_target = warp_id + lane_id * num_warps;
+        bool is_valid_target = (local_target < total_targets);
+        int target_idx = is_valid_target ? (task.target_body_offset + local_target) : 0;
 
-        //all warps strided loop on targets
-        for (int t_base = 0; t_base < total_targets; t_base += num_warps)
-        {
-            int local_target = t_base + warp_id;
-            bool is_valid_target = (local_target < total_targets);
-            // instead of enforcing validity int the loop condition (see previous implementation),
-            // we use this boolean when needed: the purpose is having all threads synchronise when required
-            int target_idx = is_valid_target ? (task.target_body_offset + local_target) : 0;
+        exafmm::real_t t_ax = 0;
+        exafmm::real_t t_ay = 0;
+        exafmm::real_t t_az = 0;
+        exafmm::real_t t_pot = 0;
+        exafmm::real_t t_acc_old_i = 0;
+        exafmm::real_t t_timestep = 1e38;
+        exafmm::real_t t_ts_accum = 0;
 
-            exafmm::real_t ax = 0;
-            exafmm::real_t ay = 0;
-            exafmm::real_t az = 0;
-            exafmm::real_t pot = 0;
-            exafmm::real_t acc_old_i = 0;
-            exafmm::real_t ts_accum = 0;
-            exafmm::real_t dt_scale = dt_param * M_SQRT1_2;
+        exafmm::real_t t_Xi, t_Yi, t_Zi;
+        exafmm::real_t t_Vxi, t_Vyi, t_Vzi, t_qi;
 
-            exafmm::real_t Xi, Yi, Zi;
-            exafmm::real_t dX, dY, dZ;
-            exafmm::real_t dVx, dVy, dVz;
-            exafmm::real_t Vxi, Vyi, Vzi, qi;
+        if(is_valid_target){
+            t_Xi = bodies.x[target_idx];
+            t_Yi = bodies.y[target_idx];
+            t_Zi = bodies.z[target_idx];
 
-            if(is_valid_target){
-                Xi = bodies.x[target_idx];
-                Yi = bodies.y[target_idx];
-                Zi = bodies.z[target_idx];
-
-                if constexpr(impl == Implementation::standard)
-                {
-                    Vxi = bodies.Vx[target_idx];
-                    Vyi = bodies.Vy[target_idx];
-                    Vzi = bodies.Vz[target_idx];
-                    qi = bodies.q[target_idx];
-                }
-            }
-
-            for(int cj = 0; cj < task.num_source_cells; cj++)
+            if constexpr(impl == Implementation::standard)
             {
-                exafmm::real_t timestep = 1e38;
-                int base = task.source_list_offset;
-                int source_body_base = interactions.source_body_offset[base + cj];
-                int src_count = interactions.source_size[base + cj];
-                
-                //shmem tiling of source bodies
-                for (int tile_base = 0; tile_base < src_count; tile_base += TILE_SIZE) {
-                    int cur_tile = min(TILE_SIZE, src_count - tile_base);
-                    __syncthreads();
-                    for (int l = tid; l < cur_tile; l += block_sz) {
-                        int g_idx = source_body_base + tile_base + l;
-                        s_x[l] = bodies.x[g_idx];
-                        s_y[l] = bodies.y[g_idx];
-                        s_z[l] = bodies.z[g_idx];
-                        s_q[l] = bodies.q[g_idx];
-                        s_issrc[l] = bodies.issource[g_idx];
-                        if constexpr (impl == Implementation::standard) {
-                            s_vx[l] = bodies.Vx[g_idx];
-                            s_vy[l] = bodies.Vy[g_idx];
-                            s_vz[l] = bodies.Vz[g_idx];
-                        }
+                t_Vxi = bodies.Vx[target_idx];
+                t_Vyi = bodies.Vy[target_idx];
+                t_Vzi = bodies.Vz[target_idx];
+                t_qi = bodies.q[target_idx];
+            }
+        }
+        
+        for(int cj = 0; cj < task.num_source_cells; cj++)
+        {
+            exafmm::real_t timestep;
+            int base = task.source_list_offset;
+            int source_body_base = interactions.source_body_offset[base + cj];
+            int src_count = interactions.source_size[base + cj];
+            
+            //shmem tiling of source bodies
+            //int warps_per_tile = TILE_SIZE / warpSize;
+            for (int tile_base = 0; tile_base < src_count; tile_base += TILE_SIZE) {
+                int cur_tile = min(TILE_SIZE, src_count - tile_base);
+                __syncthreads();
+                for (int l = tid; l < cur_tile; l += block_sz) {
+                    int g_idx = source_body_base + tile_base + l;
+                    s_x[l] = bodies.x[g_idx];
+                    s_y[l] = bodies.y[g_idx];
+                    s_z[l] = bodies.z[g_idx];
+                    s_q[l] = bodies.q[g_idx];
+                    s_issrc[l] = bodies.issource[g_idx];
+                    if constexpr (impl == Implementation::standard) {
+                        s_vx[l] = bodies.Vx[g_idx];
+                        s_vy[l] = bodies.Vy[g_idx];
+                        s_vz[l] = bodies.Vz[g_idx];
                     }
-                    __syncthreads();
+                }
+                __syncthreads();
+
+        
+                //... each of these data will be broadcasted to the whole warp
+                // when is that target's turn. This allows us (wrt previous impl.) 
+                // to have a more persistent sharing of the source tile, 
+                // inverting the loop hierarchy from targets -> source_cell (-> TILE) -> cell_bodies 
+                // to source_cell (-> TILE) -> targets -> cell_bodies, but without the need to reload 
+                // target data for each source_cell/tile ...
+                #pragma unroll 16
+                for (int wt = 0; wt < warp_targets; wt++)
+                {
+
+                    int this_target = warp_id + wt * num_warps;
+                    if(this_target >= total_targets) continue;
+
+                    exafmm::real_t w_ax = 0;
+                    exafmm::real_t w_ay = 0;
+                    exafmm::real_t w_az = 0;
+                    exafmm::real_t w_pot = 0;
+                    exafmm::real_t w_acc_old_i = 0;
+
+                    exafmm::real_t w_Xi, w_Yi, w_Zi;
+                    exafmm::real_t w_Vxi, w_Vyi, w_Vzi, w_qi;
+                    exafmm::real_t dX, dY, dZ;
+                    exafmm::real_t dVx, dVy, dVz;                
+                    
+                    w_Xi = __shfl_sync(0xFFFFFFFF, t_Xi, wt);
+                    w_Yi = __shfl_sync(0xFFFFFFFF, t_Yi, wt);
+                    w_Zi = __shfl_sync(0xFFFFFFFF, t_Zi, wt);
 
 
-                    if(is_valid_target)
+                    if constexpr(impl == Implementation::standard)
                     {
-                   
-                        for(int j = lane_id; j < cur_tile; j += blockDim.x)  //warp size
+                        w_Vxi = __shfl_sync(0xFFFFFFFF, t_Vxi, wt);
+                        w_Vyi = __shfl_sync(0xFFFFFFFF, t_Vyi, wt);
+                        w_Vzi = __shfl_sync(0xFFFFFFFF, t_Vzi, wt);
+                        w_qi = __shfl_sync(0xFFFFFFFF, t_qi, wt);
+                        timestep = __shfl_sync(0xFFFFFFFF, t_timestep, wt);
+                    }                       
+
+                    #pragma unroll 8
+                    for(int j = lane_id; j < cur_tile; j += blockDim.x)  //warp size
+                    {
+ 
+
+                        dX = s_x[j] - w_Xi;
+                        dY = s_y[j] - w_Yi;
+                        dZ = s_z[j] - w_Zi;
+
+                        if constexpr(impl == Implementation::standard)
                         {
-                            dX = s_x[j] - Xi;
-                            dY = s_y[j] - Yi;
-                            dZ = s_z[j] - Zi;                    
+                            dVx = s_vx[j] - w_Vxi;
+                            dVy = s_vy[j] - w_Vyi;
+                            dVz = s_vz[j] - w_Vzi;						
+                        }
 
+                        exafmm::real_t R2 = dX*dX + dY*dY + dZ*dZ;
+
+                      
+                        //math operations in the following blocks might look odd:
+                        //optimizations were performed to reduce as much as possible MUFU instructions 
+
+                        //removed branch dependent from R2
+                        exafmm::real_t safe_R2 = (R2 > (exafmm::real_t)0.0) ? R2 : (exafmm::real_t)1.0;
+                        exafmm::real_t invR = rsqrt(safe_R2);
+                        
+
+
+                        exafmm::real_t invR2 = invR * invR;
+
+                        exafmm::real_t mask = (R2 > (exafmm::real_t)0.0) ? (exafmm::real_t)1.0 : (exafmm::real_t)0.0;
+                        if constexpr(impl == Implementation::low)
+                        {
+                            w_acc_old_i += s_q[j] * invR2 * mask;
+                        }else
+                        {
+                            exafmm::real_t d_pot = s_q[j] * invR * s_issrc[j];
+                            w_pot += d_pot * mask;
                             
-                            exafmm::real_t R2 = dX*dX + dY*dY + dZ*dZ;
+                            exafmm::real_t mult = invR2 * d_pot * mask;
+                            w_ax += dX * mult;    
+                            w_ay += dY * mult;    
+                            w_az += dZ * mult; 
+                        }           
+                        if constexpr(impl == Implementation::standard)
+                        {                            
+                            exafmm::real_t q_sum = w_qi + s_q[j];
+                                                
+                            exafmm::real_t vdotdr2 = (dX * dVx + dY * dVy + dZ * dVz) * invR;
 
-                            if (R2 > 0)
+                            exafmm::real_t invR3 = invR2*invR;
+                            exafmm::real_t tau = dt_scale * rsqrt( invR3 * q_sum);
+                            
+                            exafmm::real_t v2 = dVx*dVx + dVy*dVy + dVz*dVz;  
+                            
+                            exafmm::real_t half_dtau = ((exafmm::real_t) 0.75) * tau * vdotdr2;
+                            half_dtau = cuda::std::fmin(half_dtau, (exafmm::real_t) 0.5);
+                            exafmm::real_t t = ((exafmm::real_t)1.0) / (((exafmm::real_t)1.0) - half_dtau);
+                            tau *= t;
+                            if (tau < timestep) timestep = tau;
+
+                            if (v2 > 0)
                             {
-                                //math operations in the following blocks might look odd:
-                                //optimizations were performed to reduce as much as possible MUFU instructions 
-                                exafmm::real_t invR = rsqrt(R2);
-                                
-                                if constexpr(impl == Implementation::standard)
-                                {
-                                    dVx = s_vx[j] - Vxi;
-                                    dVy = s_vy[j] - Vyi;
-                                    dVz = s_vz[j] - Vzi;						
-                                
-                                    exafmm::real_t v2 = dVx*dVx + dVy*dVy + dVz*dVz;                    
-                                    exafmm::real_t vdotdr2 = (dX * dVx + dY * dVy + dZ * dVz) * invR;
-
-                                    exafmm::real_t invR3 = invR*invR*invR;
-                                    exafmm::real_t tau = dt_scale * rsqrt( invR3 * (qi + s_q[j]));
-                                    exafmm::real_t half_dtau = ((exafmm::real_t) 0.75) * tau * vdotdr2;
-                                    if (half_dtau > ((exafmm::real_t) 0.5)) half_dtau = ((exafmm::real_t)0.5);
-                                    exafmm::real_t t = ((exafmm::real_t)1.0) / (((exafmm::real_t)1.0) - half_dtau);
-                                    tau *= t;
-                                    if (tau < timestep) timestep = tau;
-
-                                    if (v2 > 0)
-                                    {
-                                        exafmm::real_t R = R2 * invR;
-                                        exafmm::real_t inv_v = rsqrt(v2);
-                                        tau = dt_param * R * inv_v;
-                                        half_dtau = ((exafmm::real_t)0.5) * tau * vdotdr2 * (((exafmm::real_t)1.0) + (qi + s_q[j]) * inv_v * inv_v * invR);
-                                        
-                                        if (half_dtau > ((exafmm::real_t) 0.5)) half_dtau = ((exafmm::real_t)0.5);
-                                    exafmm::real_t t = ((exafmm::real_t)1.0) / (((exafmm::real_t)1.0) - half_dtau);
-                                        tau *= t;
-                                        if (tau < timestep) timestep = tau;
-                                    }
-                                }
-
-                                exafmm::real_t invR2 = invR * invR;
-
-                                if constexpr(impl == Implementation::low)
-                                {
-                                    acc_old_i += s_q[j] * invR2;
-                                }else
-                                {
-                                    exafmm::real_t d_pot = s_q[j] * invR * s_issrc[j];
-                                    pot += d_pot;
-                                    
-                                    exafmm::real_t mult = invR2 * d_pot;
-                                    dX *= mult;  dY *= mult;  dZ *= mult;
-                                    ax += dX;    ay += dY;    az += dZ; 
-                                }                                                 
+                                exafmm::real_t R = R2 * invR;
+                                exafmm::real_t inv_v = rsqrt(v2);
+                                tau = dt_param * R * inv_v;
+                                half_dtau = ((exafmm::real_t)0.5) * tau * vdotdr2 * (((exafmm::real_t)1.0) + q_sum * inv_v * inv_v * invR);
+                                half_dtau = cuda::std::fmin(half_dtau, (exafmm::real_t) 0.5);
+                                exafmm::real_t t = ((exafmm::real_t)1.0) / (((exafmm::real_t)1.0) - half_dtau);
+                                tau *= t;
+                                if (tau < timestep) timestep = tau;
                             }
                         }
                     }
-                }
+                    //... of course with the inverted loop we need to save the results for each
+                    // target at the end of it's loop. To avoid an exploding number of atomic writes, 
+                    // we of course use once again warp shuffling, in this case implementing a sum reduction 
+                    // (and min for timestep)
 
-                if constexpr(impl == Implementation::standard)
-                {
-                    //reducing on timestep: in sequential execution, it should be the min across the
-                    //interactions with the source
-                    #pragma unroll
-                    for (int offset = 16; offset > 0; offset /= 2) {
-                        exafmm::real_t other_ts = __shfl_down_sync(0xFFFFFFFF, timestep, offset);
-                        if (other_ts < timestep) timestep = other_ts;
+                    if constexpr (impl == Implementation::low) 
+                    {
+                        #pragma unroll
+                        for (int offset = 16; offset > 0; offset /= 2) {
+                            w_acc_old_i += __shfl_down_sync(0xFFFFFFFF, w_acc_old_i, offset);
+                        }
+                        w_acc_old_i = __shfl_sync(0xFFFFFFFF, w_acc_old_i, 0);
+                        if(lane_id == wt) t_acc_old_i += w_acc_old_i;
+                    }else
+                    {
+                        #pragma unroll
+                        for (int offset = 16; offset > 0; offset /= 2) {
+                            w_pot += __shfl_down_sync(0xFFFFFFFF, w_pot, offset);
+                            w_ax += __shfl_down_sync(0xFFFFFFFF, w_ax, offset);
+                            w_ay += __shfl_down_sync(0xFFFFFFFF, w_ay, offset);
+                            w_az += __shfl_down_sync(0xFFFFFFFF, w_az, offset);
+                        }
+                        w_pot = __shfl_sync(0xFFFFFFFF, w_pot, 0);
+                        w_ax = __shfl_sync(0xFFFFFFFF, w_ax, 0);
+                        w_ay = __shfl_sync(0xFFFFFFFF, w_ay, 0);
+                        w_az = __shfl_sync(0xFFFFFFFF, w_az, 0);
+
+                        if(lane_id == wt){
+                            t_pot += w_pot;
+                            t_ax += w_ax;
+                            t_ay += w_ay;
+                            t_az += w_az;
+                        }
                     }
-                    timestep *= timestep;
-                    timestep *= timestep;
-                    timestep = (exafmm::real_t)1 / timestep;
-                    ts_accum += timestep;
+
+
+                    //the timestep tracking is the most tricky one: it is source cell specific:
+                    // the reduction is required at the end of each target loop , but the accumulation is 
+                    // after the end of the loop on tiles
+                    if constexpr(impl == Implementation::standard)
+                    {
+                        //reducing on timestep: in sequential execution, it should be the min across the
+                        //interactions with the source
+                        #pragma unroll
+                        for (int offset = 16; offset > 0; offset /= 2) {
+                            exafmm::real_t other_ts = __shfl_down_sync(0xFFFFFFFF, timestep, offset);
+                            if (other_ts < timestep) timestep = other_ts;
+                        }
+                        exafmm::real_t reduced_ts = __shfl_sync(0xFFFFFFFF, timestep, 0);
+                        if(lane_id == wt) t_timestep = reduced_ts;
+                    }
+
                 }
             }
-
-            if(is_valid_target)
+            if constexpr(impl == Implementation::standard)
             {
+                t_timestep *= t_timestep;
+                t_timestep *= t_timestep;
+                t_timestep = (exafmm::real_t)1 / t_timestep;
+                t_ts_accum += t_timestep;
+                // we need to reset for the next target cell;
+                t_timestep = 1e38;
+            
+            }
+        }
+
+        if(is_valid_target)
+        {
+            if(task.requires_atomic){
                 if constexpr (impl == Implementation::low) 
                 {
-                    atomicAdd(&bodies.acc_old[target_idx], acc_old_i);
+                    atomicAdd(&bodies.acc_old[target_idx], t_acc_old_i);
                 } 
                 else if (bodies.issink[target_idx]) 
                 {
-                    atomicAdd(&bodies.p[target_idx], pot);
-                    atomicAdd(&bodies.Fx[target_idx], ax);
-                    atomicAdd(&bodies.Fy[target_idx], ay);
-                    atomicAdd(&bodies.Fz[target_idx], az);
-                    if(lane_id == 0) atomicAdd(&bodies.timestep[target_idx], ts_accum);
+                    atomicAdd(&bodies.p[target_idx], t_pot);
+                    atomicAdd(&bodies.Fx[target_idx], t_ax);
+                    atomicAdd(&bodies.Fy[target_idx], t_ay);
+                    atomicAdd(&bodies.Fz[target_idx], t_az);
+                    atomicAdd(&bodies.timestep[target_idx], t_ts_accum);
+                }
+            }else {
+                if constexpr (impl == Implementation::low) {
+                    bodies.acc_old[target_idx] += t_acc_old_i;
+                } else if (bodies.issink[target_idx]) {
+                    bodies.p[target_idx] += t_pot;
+                    bodies.Fx[target_idx] += t_ax;
+                    bodies.Fy[target_idx] += t_ay;
+                    bodies.Fz[target_idx] += t_az;
+                    bodies.timestep[target_idx] += t_ts_accum;
                 }
             }
         }
@@ -426,7 +535,7 @@ namespace cufmm{
         nvtxRangePushA("Concurrent Kernels");
         
         //warp granularity executions
-        dim3 threads_heavy(32, exafmm::ncrit / 32);
+        dim3 threads_heavy(32, 8);
         dim3 threads_light(32, 2);                  
 
         if (d_inter.heavy.num_tasks > 0) {

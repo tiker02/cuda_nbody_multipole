@@ -28,7 +28,7 @@ set(CMAKE_CXX_FLAGS_DEBUG          "-O0 -g -DDEBUG")
 # Device CUDA Configuration
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler \"${TAICHI_COMMON_CXX}\"")
 set(CMAKE_CUDA_FLAGS_RELEASE        "-O3 --use_fast_math -Xcompiler \"-O3 -funroll-loops -DNDEBUG\"")
-set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO "-O3 -g -lineinfo --use_fast_math -Xcompiler \"-O3 -g -DDEBUG\"")
+set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO "-O3 -g -lineinfo --ptxas-options=-v --use_fast_math -Xcompiler \"-O3 -g -DDEBUG\"")
 set(CMAKE_CUDA_FLAGS_DEBUG          "-O0 -g -G -Xcompiler \"-O0 -g -DDEBUG\"")
 
 set(TAICHI_CORE_DEFINITIONS
