@@ -42,3 +42,36 @@ Loading all the many source bodies from global memory for each target body, was 
 Unfortunately those numbers were not enough to make me realise that I didn't need to tackle memory accesses anymore. Not in that sense at least. I spent most of the remaining time trying to make a warp shuffle trick to have a single load to shared memory per source cell for a whole block, but in the end it increased the register pressure, and the reduced occupancy counterbalanced the gain. 
 I only later came to the conclusion that, with Tex Throttle and Short Scoreboard stalls, the problem was not memory throughput but memory latency. Unfortunately, any later attempt I had time to try, didn't find the right trade-off between reduced stalls and occupancy.
 
+
+## Quickstart
+
+### Prerequisites
+* **CUDA Toolkit** 
+* **CMake** (version 3.20 or newer)
+* **OpenMP** and **HDF5** (`libhdf5-dev`)
+* Python 3 (with `numpy` and `h5py` for verification scripts)
+* An NVIDIA GPU with compute capability `sm_89` (e.g., RTX 40-series). If compiling for another architecture (e.g., Ampere / `sm_86`), override `CMAKE_CUDA_ARCHITECTURES` inside CMake.
+
+### Build Instructions
+
+ **Configure the build:**
+   By default, `CMakeLists.txt` sets `CMAKE_CUDA_ARCHITECTURES 89`:
+   ```bash
+   cmake -B build -S .  -DCMAKE_BUILD_TYPE=(Release/Debug/RelWithDebInfo)
+   ```
+ **Build targets**
+ ```bash
+ #to get the two executables
+ cmake --build build --target taichi_cpu
+ cmake --build build --target taichi_gpu
+
+#to compare CPU vs. GPU output snapshots on the validation dataset (plummer_1000.dat)
+cmake --build build --target verify
+
+# to run the pipeline verification check and generate full Nsight Compute report in ncu-reports/ on the 100k body dataset (plummer_100000.dat)
+cmake --build build --target profile
+ ```
+
+ Datasets can be generated using  `scripts/plummer_gen.py `. This is the kind of dataset used in the original implementation, so it is the only one that was used for testing
+
+
